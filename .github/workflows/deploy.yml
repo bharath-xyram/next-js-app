@@ -13,6 +13,6 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
-    - run: docker build -t ${{ secrets.DOCKERHUB_USERNAME }}/next-js-app:latest .
+    - run: docker build -t ${{ secrets.DOCKERHUB_USERNAME }}/node-js-app:latest .
     - run: echo "${{secrets.DOCKERHUB_PASSWORD}}" | docker login -u ${{secrets.DOCKERHUB_USERNAME}} --password-stdin 
     - run: docker push bharathgowda652/node-js-app:latest
