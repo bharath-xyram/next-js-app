@@ -1,18 +1,45 @@
-
-name: Deploy
+name: Build and push to ECR
 
 on:
   push:
-    branches: [ "main" ]
+    branches: ["main"]
+
+env:
+  AWS_REGION: us-east-1
+  ECR_REGISTRY: 835360238037.dkr.ecr.us-east-1.amazonaws.com
+  ECR_REPOSITORY: next-js-app
 
 jobs:
-  deploy:
-
+  build-and-push:
     runs-on: ubuntu-latest
 
-
     steps:
-    - uses: actions/checkout@v4
-    - run: docker build -t ${{ secrets.DOCKERHUB_USERNAME }}/node-js-app:latest .
-    - run: echo "${{secrets.DOCKERHUB_PASSWORD}}" | docker login -u ${{secrets.DOCKERHUB_USERNAME}} --password-stdin 
-    - run: docker push bharathgowda652/node-js-app:latest
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Build Docker image
+        run: |
+          IMAGE_TAG=${{ github.sha }}
+          docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:latest -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG .
+
+      - name: Push Docker image to ECR (latest and sha)
+        run: |
+          IMAGE_TAG=${{ github.sha }}
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+
+      - name: Output image URIs
+        run: |
+          echo "Pushed: $ECR_REGISTRY/$ECR_REPOSITORY:latest"
+          echo "Pushed: $ECR_REGISTRY/$ECR_REPOSITORY:${{ github.sha }}"
