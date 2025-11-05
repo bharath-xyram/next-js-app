@@ -1,8 +1,10 @@
-name: Deploy image to EC2
+name: Deploy to EC2 (after build)
 
 on:
-  push:
-    branches: ["main"]
+  workflow_run:
+    workflows: ["Build and push to ECR"]   # <--- exact name of your build workflow
+    types:
+      - completed
 
 env:
   AWS_REGION: us-east-1
@@ -11,19 +13,20 @@ env:
 
 jobs:
   deploy:
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
 
     steps:
-      - name: Checkout repo
+      - name: Checkout (for context)
         uses: actions/checkout@v4
 
-      - name: Deploy to EC2 via SSH
+      - name: Deploy to EC2 via SSH and verify image
         uses: appleboy/ssh-action@v0.1.7
         with:
           host: ${{ secrets.EC2_HOST }}
-          username: ${{ secrets.EC2_SSH_USER }}    # ec2-user for Amazon Linux
+          username: ${{ secrets.EC2_SSH_USER }}
           port: '22'
           key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
           timeout: 10m
@@ -33,80 +36,77 @@ jobs:
             AWS_REGION="${{ env.AWS_REGION }}"
             ECR_REGISTRY="${{ env.ECR_REGISTRY }}"
             ECR_REPOSITORY="${{ env.ECR_REPOSITORY }}"
-            IMAGE_LATEST="${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:latest"
-            IMAGE_SHA="${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}"
 
-            echo "Using ECR registry: $ECR_REGISTRY"
-            echo "Using repository: $ECR_REPOSITORY"
-            echo "IMAGE_LATEST = $IMAGE_LATEST"
-            echo "IMAGE_SHA    = $IMAGE_SHA"
+            # BUILD_SHA is the commit that the build workflow produced
+            BUILD_SHA="${{ github.event.workflow_run.head_sha }}"
+            if [ -z "${BUILD_SHA}" ]; then
+              echo "ERROR: BUILD_SHA is empty"
+              exit 1
+            fi
 
-            # Install docker if missing (Amazon Linux)
+            IMAGE_TAG="${ECR_REGISTRY}/${ECR_REPOSITORY}:${BUILD_SHA}"
+            echo "Deploying image: ${IMAGE_TAG}"
+
+            # Ensure aws & docker present (install if missing)
             if ! command -v docker >/dev/null 2>&1; then
-              echo "Docker not found — installing..."
+              echo "Installing docker..."
               sudo yum update -y
               sudo amazon-linux-extras install docker -y || sudo yum install -y docker
               sudo service docker start
-              sudo usermod -aG docker ec2-user || true
             fi
-
-            # Install aws CLI if missing (so aws ecr get-login-password will work)
             if ! command -v aws >/dev/null 2>&1; then
-              echo "AWS CLI not found — installing..."
+              echo "Installing aws-cli..."
               curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
               unzip -q awscliv2.zip
               sudo ./aws/install
             fi
 
-            # Login to ECR using instance role (recommended). If your EC2 doesn't have an instance role,
-            # the instance needs AWS creds available (not recommended to embed).
+            # Login to ECR (uses instance role if available; otherwise the runner must provide creds)
             echo "Logging in to ECR..."
             aws ecr get-login-password --region "${AWS_REGION}" | sudo docker login --username AWS --password-stdin "${ECR_REGISTRY}"
 
-            # Pull the new images (latest and sha tag)
-            echo "Pulling images..."
-            sudo docker pull "${IMAGE_LATEST}" || true
-            sudo docker pull "${IMAGE_SHA}" || true
+            # Pull the exact tag built by the build workflow
+            echo "Pulling ${IMAGE_TAG} ..."
+            sudo docker pull "${IMAGE_TAG}"
 
-            # Ensure port 80 is free:
-            echo "Ensuring host port 80 is free..."
-
-            # If any docker container is publishing port 80, remove it
+            # Replace any container using port 80 (safe attempts)
             CID=$(sudo docker ps --filter "publish=80" --format '{{.ID}}' | head -n1 || true)
             if [ -n "$CID" ]; then
               echo "Removing docker container $CID that uses port 80"
               sudo docker rm -f "$CID" || true
-            else
-              echo "No docker container is using port 80"
             fi
 
-            # If still occupied, stop common web services (nginx/httpd)
-            if sudo ss -ltnp | grep -q ':80'; then
-              echo "Port 80 still in use — attempting to stop nginx/httpd services"
-              if systemctl list-units --type=service --state=active | grep -q nginx; then
-                sudo systemctl stop nginx || true
-              fi
-              if systemctl list-units --type=service --state=active | grep -q httpd; then
-                sudo systemctl stop httpd || true
-              fi
-            fi
+            # Remove existing named container
+            sudo docker rm -f nextjs-container || true
 
-            # Final check — if still occupied show PID and exit
-            if sudo ss -ltnp | grep -q ':80'; then
-              echo "ERROR: port 80 still in use after attempts to free it. Current listeners:"
-              sudo ss -ltnp | grep ':80' || true
+            # Run the new container by tag
+            sudo docker run -d --name nextjs-container --restart unless-stopped -p 80:3000 "${IMAGE_TAG}"
+
+            # --- Verification: compare running container image id to ECR manifest digest for BUILD_SHA ---
+            echo "Verifying deployed image matches ECR..."
+
+            # Get running container image ID (manifest digest-ish value)
+            RUN_IMG_ID=$(sudo docker inspect --format '{{.Image}}' nextjs-container)
+            echo "Running image id: $RUN_IMG_ID"
+
+            # Get repo digests for that image id
+            RUN_REPO_DIGESTS=$(sudo docker image inspect --format '{{json .RepoDigests}}' "$RUN_IMG_ID" || true)
+            echo "Running RepoDigests: $RUN_REPO_DIGESTS"
+
+            # Query ECR for the digest of the tag we just pulled (BUILD_SHA)
+            ECR_DIGEST=$(aws ecr describe-images --repository-name "${ECR_REPOSITORY}" --image-ids imageTag="${BUILD_SHA}" --query 'imageDetails[0].imageDigest' --output text || true)
+            echo "ECR digest for ${BUILD_SHA}: ${ECR_DIGEST}"
+
+            if [ -z "${ECR_DIGEST}" ] || [ "${ECR_DIGEST}" = "None" ]; then
+              echo "ERROR: Could not find ECR digest for tag ${BUILD_SHA}. Aborting."
               exit 1
             fi
 
-            # Stop and remove existing container by name (if exists) — idempotent
-            echo "Removing any existing container named nextjs-container..."
-            sudo docker rm -f nextjs-container || true
-
-            # Run new container (adjust ports/envs as necessary)
-            echo "Starting new container from ${IMAGE_LATEST}..."
-            sudo docker run -d --name nextjs-container \
-              --restart unless-stopped \
-              -p 80:3000 \
-              "${IMAGE_LATEST}"
-
-            echo "Deployed ${IMAGE_LATEST}"
+            # Check if the digest exists in the running image's repo digests
+            if echo "${RUN_REPO_DIGESTS}" | grep -q "${ECR_DIGEST}"; then
+              echo "SUCCESS: EC2 container is running the exact image pushed by build (${BUILD_SHA}) -> ${ECR_DIGEST}"
+            else
+              echo "ERROR: mismatch! Running image does not include ECR digest ${ECR_DIGEST}"
+              echo "Running RepoDigests: ${RUN_REPO_DIGESTS}"
+              exit 1
+            fi
