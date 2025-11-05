@@ -26,7 +26,7 @@ jobs:
           username: ${{ secrets.EC2_SSH_USER }}    # ec2-user for Amazon Linux
           port: '22'
           key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
-          timeout: 600
+          timeout: 10m            # <-- fixed: use duration string (e.g. 10m or 600s)
           script: |
             set -e
 
@@ -61,14 +61,14 @@ jobs:
             aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_REGISTRY}
 
             # Pull the new images (latest and sha tag)
-            docker pull ${IMAGE_LATEST} || true
-            docker pull ${IMAGE_SHA} || true
+            sudo docker pull ${IMAGE_LATEST} || true
+            sudo docker pull ${IMAGE_SHA} || true
 
             # Stop and remove existing container (if exists)
-            docker rm -f nextjs-container || true
+            sudo docker rm -f nextjs-container || true
 
             # Run new container (adjust ports/envs as necessary)
-            docker run -d --name nextjs-container \
+            sudo docker run -d --name nextjs-container \
               --restart unless-stopped \
               -p 80:3000 \
               ${IMAGE_LATEST}
