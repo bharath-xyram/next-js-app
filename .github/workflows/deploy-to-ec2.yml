@@ -8,8 +8,6 @@ env:
   AWS_REGION: us-east-1
   ECR_REGISTRY: 835360238037.dkr.ecr.us-east-1.amazonaws.com
   ECR_REPOSITORY: next-js-app
-  IMAGE_LATEST: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:latest
-  IMAGE_SHA: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}
 
 jobs:
   deploy:
@@ -25,12 +23,23 @@ jobs:
         uses: appleboy/ssh-action@v0.1.7
         with:
           host: ${{ secrets.EC2_HOST }}
-          username: ${{ secrets.EC2_SSH_USER }}    # use "ec2-user" for Amazon Linux
-          port: ${{ secrets.EC2_SSH_PORT || '22' }}
+          username: ${{ secrets.EC2_SSH_USER }}    # ec2-user for Amazon Linux
+          port: '22'
           key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
           timeout: 600
           script: |
             set -e
+
+            AWS_REGION="${{ env.AWS_REGION }}"
+            ECR_REGISTRY="${{ env.ECR_REGISTRY }}"
+            ECR_REPOSITORY="${{ env.ECR_REPOSITORY }}"
+            IMAGE_LATEST="${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:latest"
+            IMAGE_SHA="${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY }}:${{ github.sha }}"
+
+            echo "Using ECR registry: $ECR_REGISTRY"
+            echo "Using repository: $ECR_REPOSITORY"
+            echo "IMAGE_LATEST = $IMAGE_LATEST"
+            echo "IMAGE_SHA    = $IMAGE_SHA"
 
             # Install docker if missing (Amazon Linux)
             if ! command -v docker >/dev/null 2>&1; then
@@ -47,14 +56,21 @@ jobs:
               sudo ./aws/install
             fi
 
-            # Login to ECR using instance role (no creds required)
+            # Login to ECR using instance role (recommended). If your EC2 doesn't have an instance role,
+            # you can export AWS creds here (not recommended) or attach the role to the instance.
             aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_REGISTRY}
 
-            # Pull and run
+            # Pull the new images (latest and sha tag)
             docker pull ${IMAGE_LATEST} || true
             docker pull ${IMAGE_SHA} || true
 
+            # Stop and remove existing container (if exists)
             docker rm -f nextjs-container || true
-            docker run -d --name nextjs-container --restart unless-stopped -p 80:3000 ${IMAGE_LATEST}
+
+            # Run new container (adjust ports/envs as necessary)
+            docker run -d --name nextjs-container \
+              --restart unless-stopped \
+              -p 80:3000 \
+              ${IMAGE_LATEST}
 
             echo "Deployed ${IMAGE_LATEST}"
