@@ -1,6 +1,5 @@
 name: Deploy image to EC2
 
-# Trigger on push to main (same branch you push images from)
 on:
   push:
     branches: ["main"]
@@ -19,62 +18,43 @@ jobs:
       contents: read
 
     steps:
-      - name: Checkout repo (for context only)
+      - name: Checkout repo
         uses: actions/checkout@v4
 
-      - name: Configure AWS credentials (so runner can pull from ECR on the remote host too if needed)
-        uses: aws-actions/configure-aws-credentials@v2
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      # Use SSH action to run commands on your EC2 instance
       - name: Deploy to EC2 via SSH
         uses: appleboy/ssh-action@v0.1.7
         with:
-          host: ${{ secrets.EC2_HOST }}                # public IP or DNS of your EC2: e.g. ec2-98-92-117-139.compute-1.amazonaws.com
-          username: ${{ secrets.EC2_SSH_USER }}       # ec2-user or ubuntu
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_SSH_USER }}    # use "ec2-user" for Amazon Linux
           port: ${{ secrets.EC2_SSH_PORT || '22' }}
-          key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}     # private key (PEM) added to GitHub Secrets
+          key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
           timeout: 600
           script: |
             set -e
 
-            # Ensure docker is installed (if not, install) - comment out if already installed
+            # Install docker if missing (Amazon Linux)
             if ! command -v docker >/dev/null 2>&1; then
-              echo "Docker not found — installing..."
-              # Amazon Linux / Amazon Linux 2 (uncomment if needed)
-              if [ -f /etc/amzn-release ]; then
-                sudo yum update -y
-                sudo amazon-linux-extras install docker -y || sudo yum install -y docker
-                sudo service docker start
-              else
-                # Ubuntu (uncomment if needed)
-                sudo apt-get update -y
-                sudo apt-get install -y docker.io
-                sudo systemctl start docker
-              fi
-              sudo usermod -aG docker $USER || true
+              sudo yum update -y
+              sudo amazon-linux-extras install docker -y || sudo yum install -y docker
+              sudo service docker start
+              sudo usermod -aG docker ec2-user
             fi
 
-            # Login to ECR
+            # Install aws CLI if missing (so aws ecr get-login-password will work)
+            if ! command -v aws >/dev/null 2>&1; then
+              curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+              unzip -q awscliv2.zip
+              sudo ./aws/install
+            fi
+
+            # Login to ECR using instance role (no creds required)
             aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_REGISTRY}
 
-            # Pull the new images (latest and sha tag)
+            # Pull and run
             docker pull ${IMAGE_LATEST} || true
             docker pull ${IMAGE_SHA} || true
 
-            # Stop and remove existing container (if exists)
-            if docker ps -a --format '{{.Names}}' | grep -w nextjs-container; then
-              echo "Stopping and removing existing container..."
-              docker rm -f nextjs-container || true
-            fi
-
-            # Run new container (adjust ports/envs as necessary)
-            docker run -d --name nextjs-container \
-              --restart unless-stopped \
-              -p 80:3000 \
-              ${IMAGE_LATEST}
+            docker rm -f nextjs-container || true
+            docker run -d --name nextjs-container --restart unless-stopped -p 80:3000 ${IMAGE_LATEST}
 
             echo "Deployed ${IMAGE_LATEST}"
