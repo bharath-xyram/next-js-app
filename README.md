@@ -21,11 +21,11 @@ npx create-next-app --example with-jest with-jest-app
 ```eiuehiuf
 
 ```bash
-yarn create next-app --example with-jest with-jest-app hdh
+yarn create next-app --example with-jest with-jest-app
 ```
 
 ```bash
-pnpm create next-app --example with-jest with-jest-app
+pnpm create next-app --example with-jest with-jest-app 
 ```
 
 ## Running Tests
@@ -33,3 +33,4 @@ pnpm create next-app --example with-jest with-jest-app
 ```bash
 npm test
 ```
+test cicd
