@@ -22,9 +22,11 @@ jobs:
     if: github.ref == 'refs/heads/test'
 
     env:
-      ECR_REGISTRY: ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com
+      # **Use literals here** (no nested `${{ env.* }}` expressions)
+      ECR_REGISTRY: 835360238037.dkr.ecr.us-east-1.amazonaws.com
       ECR_REPO: testcicd
-      ROLE_ARN: arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/github-ci-ecr-role
+      ROLE_ARN: arn:aws:iam::835360238037:role/github-ci-ecr-role
+      AWS_REGION: us-east-1
 
     steps:
       - name: Checkout
@@ -62,9 +64,10 @@ jobs:
     if: github.ref == 'refs/heads/main'
 
     env:
-      ECR_REGISTRY: ${{ env.AWS_ACCOUNT_ID }}.dkr.ecr.${{ env.AWS_REGION }}.amazonaws.com
+      ECR_REGISTRY: 835360238037.dkr.ecr.us-east-1.amazonaws.com
       ECR_REPO: next-js-app-prod
-      ROLE_ARN: arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/github-ci-ecr-role-prod
+      ROLE_ARN: arn:aws:iam::835360238037:role/github-ci-ecr-role-prod
+      AWS_REGION: us-east-1
 
     steps:
       - name: Checkout
