@@ -18,7 +18,7 @@ In your terminal, run the following command:
 
 ```bash
 npx create-next-app --example with-jest with-jest-app
-```
+```eiuehiuf
 
 ```bash
 yarn create next-app --example with-jest with-jest-app hdh
